@@ -81,17 +81,19 @@ class HackConvo {
         console.log('[DEBUG] Attempting to connect to Firebase...');
         console.log('[DEBUG] Firebase database available:', !!window.firebaseDatabase);
         console.log('[DEBUG] Firebase ref available:', !!window.firebaseRef);
+        console.log('[DEBUG] Firebase set available:', !!window.firebaseSet);
+        console.log('[DEBUG] Firebase get available:', !!window.firebaseGet);
         
         try {
             // Wait for Firebase to be available
-            if (window.firebaseDatabase && window.firebaseRef) {
+            if (window.firebaseDatabase && window.firebaseRef && window.firebaseSet && window.firebaseGet) {
                 console.log('[DEBUG] Firebase is ready, connecting...');
                 this.connectFirebase();
             } else {
                 console.log('[DEBUG] Firebase not ready, waiting...');
                 // Wait a bit for Firebase to load
                 setTimeout(() => {
-                    if (window.firebaseDatabase && window.firebaseRef) {
+                    if (window.firebaseDatabase && window.firebaseRef && window.firebaseSet && window.firebaseGet) {
                         console.log('[DEBUG] Firebase is now ready, connecting...');
                         this.connectFirebase();
                     } else {
@@ -99,7 +101,7 @@ class HackConvo {
                         this.updateConnectionStatus(false);
                         this.enableSimulatedMode();
                     }
-                }, 2000); // Increased timeout
+                }, 3000); // Increased timeout
             }
         } catch (error) {
             console.error('[DEBUG] Failed to connect:', error);
@@ -110,6 +112,11 @@ class HackConvo {
 
     connectFirebase() {
         try {
+            // Check if all required Firebase functions are available
+            if (!window.firebaseDatabase || !window.firebaseRef || !window.firebaseSet || !window.firebaseGet) {
+                throw new Error('Required Firebase functions not available');
+            }
+            
             this.database = window.firebaseDatabase;
             this.ref = window.firebaseRef;
             this.push = window.firebasePush;
@@ -117,6 +124,14 @@ class HackConvo {
             this.off = window.firebaseOff;
             this.remove = window.firebaseRemove;
             this.child = window.firebaseChild;
+            this.set = window.firebaseSet;
+            this.get = window.firebaseGet;
+            
+            console.log('[DEBUG] Firebase functions loaded successfully');
+            console.log('[DEBUG] Database:', !!this.database);
+            console.log('[DEBUG] Ref:', !!this.ref);
+            console.log('[DEBUG] Set:', !!this.set);
+            console.log('[DEBUG] Get:', !!this.get);
             
             console.log('Firebase connected');
             this.updateConnectionStatus(true);
@@ -151,6 +166,13 @@ class HackConvo {
             
         } catch (error) {
             console.error('Failed to connect to Firebase:', error);
+            console.error('[DEBUG] Error details:', {
+                firebaseDatabase: !!window.firebaseDatabase,
+                firebaseRef: !!window.firebaseRef,
+                firebaseSet: !!window.firebaseSet,
+                firebaseGet: !!window.firebaseGet,
+                error: error.message
+            });
             this.updateConnectionStatus(false);
             this.enableSimulatedMode();
         }
