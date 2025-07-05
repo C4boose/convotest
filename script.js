@@ -260,25 +260,25 @@ class HackConvo {
 
     addUserToFirebase() {
         if (this.ref && this.database) {
-            // Generate a unique session ID for this session
-            if (!this.sessionId) {
-                this.sessionId = this.generateId();
-            }
-            const userPath = `users/${this.currentUser.username}/${this.sessionId}`;
+            // Use username as the key to prevent duplicate entries
+            const userPath = `users/${this.currentUser.username}`;
             const userRef = this.ref(this.database, userPath);
             const userData = {
                 ...this.currentUser,
                 lastSeen: Date.now(),
-                status: 'online',
-                sessionId: this.sessionId
+                status: 'online'
             };
             console.log('[DEBUG] Adding user to Firebase at', userPath, userData);
-            // Use set() instead of push()
-            import('https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js').then(({ set, onDisconnect }) => {
-                set(userRef, userData).then(() => {
-                    onDisconnect(userRef).remove();
-                    console.log('[DEBUG] onDisconnect set for user session:', userPath);
-                });
+            
+            // Use set() to overwrite any existing entry for this user
+            this.set(userRef, userData).then(() => {
+                // Set up disconnect handler to remove user when they leave
+                if (this.off) {
+                    this.off(userRef);
+                }
+                console.log('[DEBUG] User added to Firebase successfully');
+            }).catch(error => {
+                console.error('[DEBUG] Error adding user to Firebase:', error);
             });
         } else {
             console.warn('[DEBUG] addUserToFirebase: ref or database not available');
@@ -352,81 +352,33 @@ class HackConvo {
 
     handleFirebaseUsers(data) {
         console.log('[DEBUG] handleFirebaseUsers received data:', data);
-        // Flatten all user objects from all subkeys
-        const users = [];
-        const now = Date.now();
-        const ONLINE_THRESHOLD = 30 * 1000; // 30 seconds
-        Object.values(data).forEach(userGroup => {
-            if (typeof userGroup === 'object') {
-                Object.values(userGroup).forEach(userObj => {
-                    if (
-                        userObj &&
-                        userObj.username &&
-                        userObj.lastSeen &&
-                        (now - userObj.lastSeen < ONLINE_THRESHOLD)
-                    ) {
-                        users.push(userObj);
-                    }
-                });
-            }
-        });
         
         // Clear current online users
         this.onlineUsers.clear();
         
-        // Add all users, but handle duplicates by preferring users with session IDs
-        console.log('[DEBUG] Adding users to onlineUsers Map:');
-        const userMap = new Map(); // Temporary map to handle duplicates
+        const now = Date.now();
+        const ONLINE_THRESHOLD = 30 * 1000; // 30 seconds
         
-        users.forEach(user => {
-            const key = user.username + ':' + (user.sessionId || '');
-            console.log('- Processing user:', user.username, 'with key:', key);
-            
-            // If we already have this user, prefer the one with a session ID
-            const existingUser = userMap.get(user.username);
-            if (existingUser) {
-                if (user.sessionId && !existingUser.sessionId) {
-                    // New user has session ID, existing doesn't - replace
-                    console.log('- Replacing user without session ID with user that has session ID');
-                    userMap.set(user.username, user);
-                } else if (!user.sessionId && existingUser.sessionId) {
-                    // Existing user has session ID, new doesn't - keep existing
-                    console.log('- Keeping existing user with session ID');
-                } else {
-                    // Both have or don't have session ID - keep the newer one
-                    if (user.lastSeen > existingUser.lastSeen) {
-                        console.log('- Replacing with newer user');
-                        userMap.set(user.username, user);
-                    } else {
-                        console.log('- Keeping existing user (newer)');
-                    }
-                }
-            } else {
-                // First time seeing this user
-                console.log('- Adding new user:', user.username);
-                userMap.set(user.username, user);
+        // Process users directly (no more nested structure)
+        Object.entries(data).forEach(([username, userData]) => {
+            if (
+                userData &&
+                userData.username &&
+                userData.lastSeen &&
+                (now - userData.lastSeen < ONLINE_THRESHOLD)
+            ) {
+                console.log('[DEBUG] Adding online user:', username);
+                this.onlineUsers.set(username, userData);
             }
         });
         
-        // Now add to onlineUsers Map with proper keys
-        userMap.forEach(user => {
-            const key = user.username + ':' + (user.sessionId || '');
-            console.log('- Final add to onlineUsers:', user.username, 'with key:', key);
-            this.onlineUsers.set(key, user);
-        });
-        
         // Ensure current user is in the online users list if they're online
-        const currentUserInList = users.find(user => user.username === this.currentUser.username);
-        console.log('[DEBUG] Current user in Firebase data:', !!currentUserInList);
-        if (!currentUserInList) {
-            // Add current user if they're not in the Firebase data but should be online
-            const currentUserKey = this.currentUser.username + ':' + (this.sessionId || '');
-            console.log('- Adding current user with key:', currentUserKey);
-            this.onlineUsers.set(currentUserKey, {
+        if (!this.onlineUsers.has(this.currentUser.username)) {
+            console.log('[DEBUG] Adding current user to online list');
+            this.onlineUsers.set(this.currentUser.username, {
                 ...this.currentUser,
                 lastSeen: Date.now(),
-                status: 'online',
-                sessionId: this.sessionId
+                status: 'online'
             });
         }
         
