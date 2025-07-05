@@ -67,7 +67,9 @@ class HackConvo {
             this.initUserProfile();
             this.connectWebSocket();
             this.setupTypingIndicator();
-            this.checkUserStatus(); // Check if user is muted/banned
+            this.checkUserStatus().catch(error => {
+                console.error('[DEBUG] Error in checkUserStatus:', error);
+            }); // Check if user is muted/banned
         }
         
         // Load saved theme
@@ -1451,8 +1453,13 @@ class HackConvo {
         newMessages.forEach(message => {
             const messageElement = document.createElement('div');
             messageElement.className = `message ${message.own ? 'own' : ''}`;
+            
+            // Check if current user is staff and can moderate this message
+            const canModerate = this.canModerateUser(message.author);
+            
             // Only show author name for received messages (not own messages)
-            const authorDisplay = message.own ? '' : `<span class="message-author">${message.author}</span>`;
+            const authorDisplay = message.own ? '' : this.renderAuthorName(message.author, canModerate);
+            
             // Ensure avatar URL is valid
             const avatarUrl = message.avatar || `https://ui-avatars.com/api/?name=${message.author}&background=333&color=fff`;
             messageElement.innerHTML = `
@@ -1471,6 +1478,388 @@ class HackConvo {
         });
         this.lastRenderedMessageCount = this.messages.length;
         this.scrollToBottom();
+    }
+
+    renderAuthorName(username, canModerate) {
+        if (!canModerate) {
+            return `<span class="message-author">${username}</span>`;
+        }
+        
+        return `
+            <span class="message-author moddable" 
+                  data-username="${username}" 
+                  onmouseenter="app.showModMenu(event, '${username}')" 
+                  onmouseleave="app.hideModMenu()">
+                ${username}
+                <i class="fas fa-chevron-down mod-indicator"></i>
+            </span>
+        `;
+    }
+
+    canModerateUser(username) {
+        // Can't moderate yourself
+        if (username === this.currentUser.username) return false;
+        
+        // Check if current user is staff
+        const userRole = this.currentUser.role || 'user';
+        if (userRole === 'user') return false;
+        
+        // Get target user's role
+        const targetUser = this.onlineUsers.get(username);
+        const targetRole = targetUser ? (targetUser.role || 'user') : 'user';
+        
+        // Can't moderate users with same or higher role
+        return this.getRoleLevel(userRole) > this.getRoleLevel(targetRole);
+    }
+
+    showModMenu(event, username) {
+        // Remove any existing mod menu
+        this.hideModMenu();
+        
+        const userRole = this.currentUser.role || 'user';
+        const targetUser = this.onlineUsers.get(username);
+        const targetRole = targetUser ? (targetUser.role || 'user') : 'user';
+        
+        // Create mod menu
+        const modMenu = document.createElement('div');
+        modMenu.className = 'mod-menu';
+        modMenu.id = 'mod-menu';
+        
+        let menuItems = '';
+        
+        // Kick option (all staff)
+        menuItems += `
+            <div class="mod-menu-item" onclick="app.kickUser('${username}')">
+                <i class="fas fa-boot"></i> Kick (10 min)
+            </div>
+        `;
+        
+        // Mute options (all staff)
+        menuItems += `
+            <div class="mod-menu-item" onclick="app.showMuteModal('${username}')">
+                <i class="fas fa-microphone-slash"></i> Mute
+            </div>
+        `;
+        
+        // Ban option (admin only)
+        if (userRole === 'admin') {
+            menuItems += `
+                <div class="mod-menu-item" onclick="app.showBanModal('${username}')">
+                    <i class="fas fa-ban"></i> Ban
+                </div>
+            `;
+        }
+        
+        // Role management (admin only, can't change own role)
+        if (userRole === 'admin' && username !== this.currentUser.username) {
+            menuItems += `
+                <div class="mod-menu-item" onclick="app.showRoleModal('${username}', '${targetRole}')">
+                    <i class="fas fa-user-tag"></i> Change Role
+                </div>
+            `;
+        }
+        
+        modMenu.innerHTML = menuItems;
+        
+        // Position the menu
+        const rect = event.target.getBoundingClientRect();
+        modMenu.style.position = 'fixed';
+        modMenu.style.left = rect.left + 'px';
+        modMenu.style.top = (rect.bottom + 5) + 'px';
+        modMenu.style.zIndex = '1000';
+        
+        document.body.appendChild(modMenu);
+        
+        // Add click outside to close
+        setTimeout(() => {
+            document.addEventListener('click', this.hideModMenuOnClick);
+        }, 100);
+    }
+
+    hideModMenu() {
+        const modMenu = document.getElementById('mod-menu');
+        if (modMenu) {
+            modMenu.remove();
+        }
+    }
+
+    hideModMenuOnClick = (event) => {
+        if (!event.target.closest('.mod-menu') && !event.target.closest('.moddable')) {
+            this.hideModMenu();
+            document.removeEventListener('click', this.hideModMenuOnClick);
+        }
+    }
+
+    // Moderation functions
+    async kickUser(username) {
+        if (!confirm(`Are you sure you want to kick ${username}? They will be unable to chat for 10 minutes.`)) return;
+        
+        try {
+            console.log(`[MOD] Kicking user: ${username}`);
+            
+            // Remove user from online users
+            const onlineUserRef = this.ref(this.database, `users/${username}`);
+            await this.remove(onlineUserRef);
+            
+            // Create kick data with 10-minute timeout
+            const kickData = {
+                username: username,
+                adminUsername: this.currentUser.username,
+                reason: 'Kicked by ' + (this.currentUser.role || 'staff'),
+                timestamp: Date.now(),
+                expiresAt: Date.now() + (10 * 60 * 1000), // 10 minutes
+                duration: 10
+            };
+            
+            // Add to moderation database
+            const kickRef = this.ref(this.database, `moderation/kicked/${username}`);
+            await this.set(kickRef, kickData);
+            
+            this.showNotification(`User ${username} has been kicked for 10 minutes.`, 'success');
+            this.hideModMenu();
+            
+        } catch (error) {
+            console.error('[MOD] Error kicking user:', error);
+            this.showNotification('Failed to kick user. Please try again.', 'error');
+        }
+    }
+
+    showMuteModal(username) {
+        this.hideModMenu();
+        this.selectedUser = username;
+        
+        const maxDuration = this.currentUser.role === 'admin' ? 10080 : 1440; // Admin: 7 days, Mod: 24 hours
+        const defaultDuration = this.currentUser.role === 'admin' ? 60 : 30; // Admin: 1 hour, Mod: 30 minutes
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.id = 'mute-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Mute User: ${username}</h3>
+                    <button onclick="app.closeMuteModal()" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="mute-duration">Duration (minutes):</label>
+                        <input type="number" id="mute-duration" min="1" max="${maxDuration}" value="${defaultDuration}" placeholder="${defaultDuration}">
+                        <small style="color: var(--text-muted); font-size: 0.8rem;">
+                            ${this.currentUser.role === 'admin' ? 'Maximum: 7 days (10080 minutes)' : 'Maximum: 24 hours (1440 minutes)'}
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label for="mute-reason">Reason:</label>
+                        <input type="text" id="mute-reason" placeholder="Enter reason for mute">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="app.closeMuteModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="app.muteUser()">Mute User</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+    }
+
+    closeMuteModal() {
+        const modal = document.getElementById('mute-modal');
+        if (modal) {
+            modal.remove();
+        }
+        this.selectedUser = null;
+    }
+
+    async muteUser() {
+        if (!this.selectedUser) return;
+        
+        const duration = parseInt(document.getElementById('mute-duration').value);
+        const reason = document.getElementById('mute-reason').value.trim();
+        
+        if (!duration || duration < 1) {
+            this.showNotification('Please enter a valid duration.', 'error');
+            return;
+        }
+        
+        try {
+            console.log(`[MOD] Muting user: ${this.selectedUser} for ${duration} minutes`);
+            
+            const expiresAt = Date.now() + (duration * 60 * 1000);
+            
+            const muteData = {
+                username: this.selectedUser,
+                adminUsername: this.currentUser.username,
+                reason: reason || 'No reason provided',
+                duration: duration,
+                expiresAt: expiresAt,
+                timestamp: Date.now()
+            };
+            
+            // Add to moderation database
+            const muteRef = this.ref(this.database, `moderation/muted/${this.selectedUser}`);
+            await this.set(muteRef, muteData);
+            
+            this.closeMuteModal();
+            this.showNotification(`User ${this.selectedUser} has been muted for ${duration} minutes.`, 'success');
+            
+        } catch (error) {
+            console.error('[MOD] Error muting user:', error);
+            this.showNotification('Failed to mute user. Please try again.', 'error');
+        }
+    }
+
+    showBanModal(username) {
+        this.hideModMenu();
+        this.selectedUser = username;
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.id = 'ban-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Ban User: ${username}</h3>
+                    <button onclick="app.closeBanModal()" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="ban-duration">Duration (minutes, 0 for permanent):</label>
+                        <input type="number" id="ban-duration" min="0" max="10080" value="1440" placeholder="1440">
+                        <small style="color: var(--text-muted); font-size: 0.8rem;">
+                            Maximum: 7 days (10080 minutes), 0 for permanent ban
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label for="ban-reason">Reason:</label>
+                        <input type="text" id="ban-reason" placeholder="Enter reason for ban">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="app.closeBanModal()">Cancel</button>
+                    <button class="btn btn-danger" onclick="app.banUser()">Ban User</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+    }
+
+    closeBanModal() {
+        const modal = document.getElementById('ban-modal');
+        if (modal) {
+            modal.remove();
+        }
+        this.selectedUser = null;
+    }
+
+    async banUser() {
+        if (!this.selectedUser) return;
+        
+        const duration = parseInt(document.getElementById('ban-duration').value);
+        const reason = document.getElementById('ban-reason').value.trim();
+        
+        try {
+            console.log(`[MOD] Banning user: ${this.selectedUser} for ${duration} minutes`);
+            
+            const expiresAt = duration > 0 ? Date.now() + (duration * 60 * 1000) : null;
+            
+            const banData = {
+                username: this.selectedUser,
+                adminUsername: this.currentUser.username,
+                reason: reason || 'No reason provided',
+                duration: duration,
+                expiresAt: expiresAt,
+                timestamp: Date.now()
+            };
+            
+            // Add to moderation database
+            const banRef = this.ref(this.database, `moderation/banned/${this.selectedUser}`);
+            await this.set(banRef, banData);
+            
+            // Remove from online users
+            const onlineUserRef = this.ref(this.database, `users/${this.selectedUser}`);
+            await this.remove(onlineUserRef);
+            
+            this.closeBanModal();
+            this.showNotification(`User ${this.selectedUser} has been banned.`, 'success');
+            
+        } catch (error) {
+            console.error('[MOD] Error banning user:', error);
+            this.showNotification('Failed to ban user. Please try again.', 'error');
+        }
+    }
+
+    showRoleModal(username, currentRole) {
+        this.hideModMenu();
+        this.selectedUser = username;
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.id = 'role-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Change Role: ${username}</h3>
+                    <button onclick="app.closeRoleModal()" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="role-select">New Role:</label>
+                        <select id="role-select">
+                            <option value="user" ${currentRole === 'user' ? 'selected' : ''}>User</option>
+                            <option value="moderator" ${currentRole === 'moderator' ? 'selected' : ''}>Moderator</option>
+                            <option value="admin" ${currentRole === 'admin' ? 'selected' : ''}>Admin</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="app.closeRoleModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="app.changeUserRole()">Change Role</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+    }
+
+    closeRoleModal() {
+        const modal = document.getElementById('role-modal');
+        if (modal) {
+            modal.remove();
+        }
+        this.selectedUser = null;
+    }
+
+    async changeUserRole() {
+        if (!this.selectedUser) return;
+        
+        const newRole = document.getElementById('role-select').value;
+        
+        try {
+            console.log(`[MOD] Changing role for ${this.selectedUser} to ${newRole}`);
+            
+            // Update in both registered_users and users locations
+            const registeredUserRef = this.ref(this.database, `registered_users/${this.selectedUser}`);
+            const onlineUserRef = this.ref(this.database, `users/${this.selectedUser}`);
+            
+            const userData = {
+                role: newRole,
+                roleChangedAt: Date.now(),
+                roleChangedBy: this.currentUser.username
+            };
+            
+            // Update both locations
+            await this.set(registeredUserRef, userData);
+            await this.set(onlineUserRef, userData);
+            
+            this.closeRoleModal();
+            this.showNotification(`User ${this.selectedUser} role changed to ${newRole}.`, 'success');
+            
+        } catch (error) {
+            console.error('[MOD] Error changing user role:', error);
+            this.showNotification('Failed to change user role. Please try again.', 'error');
+        }
     }
 
     formatMessage(text) {
@@ -1822,30 +2211,63 @@ class HackConvo {
     }
 
     // Check if user is muted or banned
-    checkUserStatus() {
-        if (!this.currentUser) return;
+    async checkUserStatus() {
+        if (!this.currentUser || !this.database || !this.ref || !this.get) return;
         
-        // Check if user is banned
-        if (this.currentUser.isBanned) {
-            const banData = this.currentUser.banData;
-            if (banData && banData.expiresAt && Date.now() > banData.expiresAt) {
-                // Ban has expired, remove it
-                this.removeBanStatus();
-            } else {
-                this.showBanMessage(banData);
-                return;
+        try {
+            // Check moderation status from Firebase
+            const moderationRef = this.ref(this.database, 'moderation');
+            const snapshot = await this.get(moderationRef);
+            
+            if (snapshot.exists()) {
+                const moderationData = snapshot.val();
+                
+                // Check if user is banned
+                if (moderationData.banned && moderationData.banned[this.currentUser.username]) {
+                    const banData = moderationData.banned[this.currentUser.username];
+                    if (banData.expiresAt && Date.now() > banData.expiresAt) {
+                        // Ban has expired, remove it
+                        await this.removeBanStatus();
+                    } else {
+                        this.currentUser.isBanned = true;
+                        this.currentUser.banData = banData;
+                        this.saveUser(this.currentUser);
+                        this.showBanMessage(banData);
+                        return;
+                    }
+                } else {
+                    // Clear ban status if no longer banned
+                    if (this.currentUser.isBanned) {
+                        delete this.currentUser.isBanned;
+                        delete this.currentUser.banData;
+                        this.saveUser(this.currentUser);
+                    }
+                }
+                
+                // Check if user is muted
+                if (moderationData.muted && moderationData.muted[this.currentUser.username]) {
+                    const muteData = moderationData.muted[this.currentUser.username];
+                    if (muteData.expiresAt && Date.now() > muteData.expiresAt) {
+                        // Mute has expired, remove it
+                        await this.removeMuteStatus();
+                    } else {
+                        this.currentUser.isMuted = true;
+                        this.currentUser.muteData = muteData;
+                        this.saveUser(this.currentUser);
+                        this.showMuteMessage(muteData);
+                    }
+                } else {
+                    // Clear mute status if no longer muted
+                    if (this.currentUser.isMuted) {
+                        delete this.currentUser.isMuted;
+                        delete this.currentUser.muteData;
+                        this.saveUser(this.currentUser);
+                        this.enableMessageSending();
+                    }
+                }
             }
-        }
-        
-        // Check if user is muted
-        if (this.currentUser.isMuted) {
-            const muteData = this.currentUser.muteData;
-            if (muteData && muteData.expiresAt && Date.now() > muteData.expiresAt) {
-                // Mute has expired, remove it
-                this.removeMuteStatus();
-            } else {
-                this.showMuteMessage(muteData);
-            }
+        } catch (error) {
+            console.error('[DEBUG] Error checking user status:', error);
         }
     }
 
@@ -1888,6 +2310,17 @@ class HackConvo {
             messageInput.placeholder = 'You are muted and cannot send messages';
         }
         if (sendBtn) sendBtn.disabled = true;
+    }
+
+    enableMessageSending() {
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        
+        if (messageInput) {
+            messageInput.disabled = false;
+            messageInput.placeholder = 'Type your message...';
+        }
+        if (sendBtn) sendBtn.disabled = false;
     }
 
     async removeBanStatus() {
