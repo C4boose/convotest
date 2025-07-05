@@ -904,6 +904,9 @@ class HackConvo {
     setupReadOnlyMode() {
         console.log('Setting up read-only mode');
         
+        // Show registration banner for unregistered users
+        this.showRegistrationBanner();
+        
         // Update header to show "Guest" status
         document.getElementById('header-username').textContent = 'Guest';
         document.getElementById('user-avatar').src = 'https://ui-avatars.com/api/?name=Guest&background=666&color=fff';
@@ -967,6 +970,33 @@ class HackConvo {
         
         // Connect to Firebase for read-only access (messages and users)
         this.connectWebSocket();
+    }
+
+    showRegistrationBanner() {
+        const banner = document.getElementById('registration-banner');
+        if (banner) {
+            // Check if user has dismissed the banner before
+            const bannerDismissed = localStorage.getItem('registration_banner_dismissed');
+            if (!bannerDismissed) {
+                banner.style.display = 'block';
+                
+                // Auto-hide banner after 30 seconds
+                setTimeout(() => {
+                    if (banner.style.display !== 'none') {
+                        this.hideRegistrationBanner();
+                    }
+                }, 30000);
+            }
+        }
+    }
+
+    hideRegistrationBanner() {
+        const banner = document.getElementById('registration-banner');
+        if (banner) {
+            banner.style.display = 'none';
+            // Remember that user dismissed the banner
+            localStorage.setItem('registration_banner_dismissed', 'true');
+        }
     }
 
     initUserProfile() {
@@ -2594,3 +2624,16 @@ document.addEventListener('visibilitychange', () => {
         document.title = 'HackConvo - Public Chat';
     }
 });
+
+// Global function to hide registration banner
+function hideRegistrationBanner() {
+    if (window.app) {
+        app.hideRegistrationBanner();
+    } else {
+        const banner = document.getElementById('registration-banner');
+        if (banner) {
+            banner.style.display = 'none';
+            localStorage.setItem('registration_banner_dismissed', 'true');
+        }
+    }
+}
