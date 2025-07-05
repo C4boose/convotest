@@ -1488,8 +1488,7 @@ class HackConvo {
         return `
             <span class="message-author moddable" 
                   data-username="${username}" 
-                  onmouseenter="app.showModMenu(event, '${username}')" 
-                  onmouseleave="app.hideModMenu()">
+                  onclick="app.toggleModMenu(event, '${username}')">
                 ${username}
                 <i class="fas fa-chevron-down mod-indicator"></i>
             </span>
@@ -1512,9 +1511,20 @@ class HackConvo {
         return this.getRoleLevel(userRole) > this.getRoleLevel(targetRole);
     }
 
-    showModMenu(event, username) {
-        // Remove any existing mod menu
-        this.hideModMenu();
+    toggleModMenu(event, username) {
+        event.stopPropagation(); // Prevent event bubbling
+        
+        const existingMenu = document.getElementById('mod-menu');
+        if (existingMenu) {
+            // If menu is already open for this user, close it
+            if (existingMenu.dataset.username === username) {
+                this.hideModMenu();
+                return;
+            } else {
+                // If menu is open for different user, close it first
+                this.hideModMenu();
+            }
+        }
         
         const userRole = this.currentUser.role || 'user';
         const targetUser = this.onlineUsers.get(username);
@@ -1524,6 +1534,7 @@ class HackConvo {
         const modMenu = document.createElement('div');
         modMenu.className = 'mod-menu';
         modMenu.id = 'mod-menu';
+        modMenu.dataset.username = username; // Track which user this menu is for
         
         let menuItems = '';
         
@@ -1701,6 +1712,7 @@ class HackConvo {
             await this.set(muteRef, muteData);
             
             this.closeMuteModal();
+            this.hideModMenu();
             this.showNotification(`User ${this.selectedUser} has been muted for ${duration} minutes.`, 'success');
             
         } catch (error) {
@@ -1782,6 +1794,7 @@ class HackConvo {
             await this.remove(onlineUserRef);
             
             this.closeBanModal();
+            this.hideModMenu();
             this.showNotification(`User ${this.selectedUser} has been banned.`, 'success');
             
         } catch (error) {
@@ -1854,6 +1867,7 @@ class HackConvo {
             await this.set(onlineUserRef, userData);
             
             this.closeRoleModal();
+            this.hideModMenu();
             this.showNotification(`User ${this.selectedUser} role changed to ${newRole}.`, 'success');
             
         } catch (error) {
