@@ -73,18 +73,29 @@ class AdminPromoter {
         try {
             console.log(`[ADMIN PROMOTER] Promoting ${username} to admin...`);
 
-            // Get current user data
-            const userRef = this.ref(this.database, `registered_users/${username}`);
-            const snapshot = await this.get(userRef);
+            // Get current user data from both locations
+            const registeredUserRef = this.ref(this.database, `registered_users/${username}`);
+            const onlineUserRef = this.ref(this.database, `users/${username}`);
+            
+            const registeredSnapshot = await this.get(registeredUserRef);
+            const onlineSnapshot = await this.get(onlineUserRef);
 
-            if (!snapshot.exists()) {
-                console.error(`[ADMIN PROMOTER] User ${username} not found`);
+            let userData = null;
+            let userRef = null;
+
+            if (registeredSnapshot.exists()) {
+                userData = registeredSnapshot.val();
+                userRef = registeredUserRef;
+                console.log('[ADMIN PROMOTER] Found user in registered_users:', userData);
+            } else if (onlineSnapshot.exists()) {
+                userData = onlineSnapshot.val();
+                userRef = onlineUserRef;
+                console.log('[ADMIN PROMOTER] Found user in users:', userData);
+            } else {
+                console.error(`[ADMIN PROMOTER] User ${username} not found in either location`);
                 alert(`User ${username} not found`);
                 return;
             }
-
-            const userData = snapshot.val();
-            console.log('[ADMIN PROMOTER] Current user data:', userData);
 
             // Update user to admin
             const updatedUserData = {
@@ -94,7 +105,15 @@ class AdminPromoter {
                 promotedBy: 'AdminPromoter'
             };
 
+            // Update in both locations to ensure consistency
             await this.set(userRef, updatedUserData);
+            
+            // Also update in the other location if it exists
+            if (userRef === registeredUserRef && onlineSnapshot.exists()) {
+                await this.set(onlineUserRef, updatedUserData);
+            } else if (userRef === onlineUserRef && registeredSnapshot.exists()) {
+                await this.set(registeredUserRef, updatedUserData);
+            }
             console.log(`[ADMIN PROMOTER] Successfully promoted ${username} to admin`);
             alert(`Successfully promoted ${username} to admin!`);
 
@@ -116,18 +135,29 @@ class AdminPromoter {
         try {
             console.log(`[ADMIN PROMOTER] Promoting ${username} to moderator...`);
 
-            // Get current user data
-            const userRef = this.ref(this.database, `registered_users/${username}`);
-            const snapshot = await this.get(userRef);
+            // Get current user data from both locations
+            const registeredUserRef = this.ref(this.database, `registered_users/${username}`);
+            const onlineUserRef = this.ref(this.database, `users/${username}`);
+            
+            const registeredSnapshot = await this.get(registeredUserRef);
+            const onlineSnapshot = await this.get(onlineUserRef);
 
-            if (!snapshot.exists()) {
-                console.error(`[ADMIN PROMOTER] User ${username} not found`);
+            let userData = null;
+            let userRef = null;
+
+            if (registeredSnapshot.exists()) {
+                userData = registeredSnapshot.val();
+                userRef = registeredUserRef;
+                console.log('[ADMIN PROMOTER] Found user in registered_users:', userData);
+            } else if (onlineSnapshot.exists()) {
+                userData = onlineSnapshot.val();
+                userRef = onlineUserRef;
+                console.log('[ADMIN PROMOTER] Found user in users:', userData);
+            } else {
+                console.error(`[ADMIN PROMOTER] User ${username} not found in either location`);
                 alert(`User ${username} not found`);
                 return;
             }
-
-            const userData = snapshot.val();
-            console.log('[ADMIN PROMOTER] Current user data:', userData);
 
             // Update user to moderator
             const updatedUserData = {
@@ -137,7 +167,15 @@ class AdminPromoter {
                 promotedBy: 'AdminPromoter'
             };
 
+            // Update in both locations to ensure consistency
             await this.set(userRef, updatedUserData);
+            
+            // Also update in the other location if it exists
+            if (userRef === registeredUserRef && onlineSnapshot.exists()) {
+                await this.set(onlineUserRef, updatedUserData);
+            } else if (userRef === onlineUserRef && registeredSnapshot.exists()) {
+                await this.set(registeredUserRef, updatedUserData);
+            }
             console.log(`[ADMIN PROMOTER] Successfully promoted ${username} to moderator`);
             alert(`Successfully promoted ${username} to moderator!`);
 
@@ -158,16 +196,31 @@ class AdminPromoter {
     async listAdmins() {
         try {
             console.log('[ADMIN PROMOTER] Listing all users with roles...');
-            const usersRef = this.ref(this.database, 'registered_users');
-            const snapshot = await this.get(usersRef);
+            
+            // Check both registered_users and users locations
+            const registeredUsersRef = this.ref(this.database, 'registered_users');
+            const onlineUsersRef = this.ref(this.database, 'users');
+            
+            const registeredSnapshot = await this.get(registeredUsersRef);
+            const onlineSnapshot = await this.get(onlineUsersRef);
 
-            if (!snapshot.exists()) {
-                console.log('[ADMIN PROMOTER] No users found');
-                return;
+            const allUsers = {};
+
+            // Merge users from both locations
+            if (registeredSnapshot.exists()) {
+                Object.assign(allUsers, registeredSnapshot.val());
+            }
+            
+            if (onlineSnapshot.exists()) {
+                Object.assign(allUsers, onlineSnapshot.val());
             }
 
-            const users = snapshot.val();
-            const roleUsers = Object.entries(users)
+            if (Object.keys(allUsers).length === 0) {
+                console.log('[ADMIN PROMOTER] No users found');
+                return [];
+            }
+
+            const roleUsers = Object.entries(allUsers)
                 .filter(([username, userData]) => userData.role && userData.role !== 'user')
                 .map(([username, userData]) => ({
                     username,

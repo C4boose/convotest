@@ -158,7 +158,9 @@ class HackConvo {
             
             // Add current user to online users (only if registered)
             if (!this.isReadOnly) {
-                this.addUserToFirebase();
+                this.addUserToFirebase().catch(error => {
+                    console.error('[DEBUG] Error in addUserToFirebase:', error);
+                });
             }
             
             // Start periodic cleanup of old messages
@@ -280,31 +282,59 @@ class HackConvo {
         });
     }
 
-    addUserToFirebase() {
-        if (this.ref && this.database) {
+    async addUserToFirebase() {
+        if (this.ref && this.database && this.get) {
             // Use username as the key to prevent duplicate entries
             const userPath = `users/${this.currentUser.username}`;
             const userRef = this.ref(this.database, userPath);
-            const userData = {
-                ...this.currentUser,
-                lastSeen: Date.now(),
-                status: 'online'
-            };
-            console.log('[DEBUG] Adding user to Firebase at', userPath, userData);
             
-            // Use set() to overwrite any existing entry for this user
-            this.set(userRef, userData).then(() => {
-                // Set up disconnect handler to remove user when they leave
-                if (this.off) {
-                    this.off(userRef);
+            try {
+                // First, check if user already exists in database and get their current role
+                const snapshot = await this.get(userRef);
+                if (snapshot.exists()) {
+                    const dbUser = snapshot.val();
+                    console.log('[DEBUG] Found existing user in database:', dbUser);
+                    
+                    // Update local user with database role if it's higher than current
+                    if (dbUser.role && this.getRoleLevel(dbUser.role) > this.getRoleLevel(this.currentUser.role || 'user')) {
+                        console.log('[DEBUG] Updating local user role from', this.currentUser.role, 'to', dbUser.role);
+                        this.currentUser.role = dbUser.role;
+                        this.saveUser(this.currentUser);
+                        
+                        // Update UI to reflect new role
+                        this.addAdminPanelButton();
+                        this.showNotification(`Role updated to ${dbUser.role}`, 'success');
+                    }
                 }
+                
+                // Prepare user data for Firebase
+                const userData = {
+                    ...this.currentUser,
+                    lastSeen: Date.now(),
+                    status: 'online'
+                };
+                
+                console.log('[DEBUG] Adding user to Firebase at', userPath, userData);
+                
+                // Use set() to overwrite any existing entry for this user
+                await this.set(userRef, userData);
                 console.log('[DEBUG] User added to Firebase successfully');
-            }).catch(error => {
+                
+            } catch (error) {
                 console.error('[DEBUG] Error adding user to Firebase:', error);
-            });
+            }
         } else {
-            console.warn('[DEBUG] addUserToFirebase: ref or database not available');
+            console.warn('[DEBUG] addUserToFirebase: Firebase functions not available');
         }
+    }
+
+    getRoleLevel(role) {
+        const roleLevels = {
+            'user': 1,
+            'moderator': 2,
+            'admin': 3
+        };
+        return roleLevels[role] || 1;
     }
 
     handleFirebaseMessages(data) {
@@ -391,6 +421,11 @@ class HackConvo {
             ) {
                 console.log('[DEBUG] Adding online user:', username);
                 this.onlineUsers.set(username, userData);
+                
+                // Check if this is the current user and sync role if needed
+                if (username === this.currentUser.username && userData.role) {
+                    this.syncUserRole(userData);
+                }
             }
         });
         
@@ -407,6 +442,19 @@ class HackConvo {
         // Update UI
         this.renderOnlineUsers();
         this.updateOnlineCount();
+    }
+
+    syncUserRole(dbUser) {
+        // Only update if the database role is higher than current role
+        if (dbUser.role && this.getRoleLevel(dbUser.role) > this.getRoleLevel(this.currentUser.role || 'user')) {
+            console.log('[DEBUG] Syncing user role from', this.currentUser.role, 'to', dbUser.role);
+            this.currentUser.role = dbUser.role;
+            this.saveUser(this.currentUser);
+            
+            // Update UI to reflect new role
+            this.addAdminPanelButton();
+            this.showNotification(`Role updated to ${dbUser.role}`, 'success');
+        }
     }
 
     handleIncomingMessage(data) {
