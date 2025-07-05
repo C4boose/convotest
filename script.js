@@ -1497,18 +1497,40 @@ class HackConvo {
 
     canModerateUser(username) {
         // Can't moderate yourself
-        if (username === this.currentUser.username) return false;
+        if (username === this.currentUser.username) {
+            console.log('[MOD DEBUG] Cannot moderate yourself');
+            return false;
+        }
         
         // Check if current user is staff
         const userRole = this.currentUser.role || 'user';
-        if (userRole === 'user') return false;
+        if (userRole === 'user') {
+            console.log('[MOD DEBUG] Current user is not staff');
+            return false;
+        }
         
-        // Get target user's role
+        // Get target user's role from online users first
+        let targetRole = 'user';
         const targetUser = this.onlineUsers.get(username);
-        const targetRole = targetUser ? (targetUser.role || 'user') : 'user';
+        if (targetUser && targetUser.role) {
+            targetRole = targetUser.role;
+        } else {
+            // If not in online users, check if we can moderate them based on current user's role
+            // Moderators can moderate regular users, admins can moderate everyone except other admins
+            if (userRole === 'moderator') {
+                // Moderators can moderate users (assume unknown users are regular users)
+                targetRole = 'user';
+            } else if (userRole === 'admin') {
+                // Admins can moderate everyone except other admins
+                // For now, assume unknown users are not admins
+                targetRole = 'user';
+            }
+        }
         
-        // Can't moderate users with same or higher role
-        return this.getRoleLevel(userRole) > this.getRoleLevel(targetRole);
+        const canModerate = this.getRoleLevel(userRole) > this.getRoleLevel(targetRole);
+        console.log(`[MOD DEBUG] ${this.currentUser.username} (${userRole}) can moderate ${username} (${targetRole}): ${canModerate}`);
+        
+        return canModerate;
     }
 
     toggleModMenu(event, username) {
