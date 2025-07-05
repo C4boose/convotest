@@ -20,9 +20,20 @@ class HackConvoAdmin {
 
     init() {
         console.log('[ADMIN DEBUG] Initializing admin panel...');
+        console.log('[ADMIN DEBUG] Current user:', this.currentUser);
         
         // Check if user is admin or moderator
-        if (!this.currentUser || (this.currentUser.role !== 'admin' && this.currentUser.role !== 'moderator')) {
+        if (!this.currentUser) {
+            console.log('[ADMIN DEBUG] No current user found');
+            this.showError('No user logged in. Please log in first.');
+            setTimeout(() => {
+                window.location.href = 'index.html';
+            }, 2000);
+            return;
+        }
+        
+        if (this.currentUser.role !== 'admin' && this.currentUser.role !== 'moderator') {
+            console.log('[ADMIN DEBUG] User role is:', this.currentUser.role);
             console.log('[ADMIN DEBUG] User is not admin/moderator, redirecting...');
             this.showError('Access denied. Admin or moderator privileges required.');
             setTimeout(() => {

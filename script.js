@@ -158,6 +158,26 @@ class HackConvo {
                 }
             });
             
+            // Subscribe to moderation updates
+            this.moderationRef = this.ref(this.database, 'moderation');
+            this.onValue(this.moderationRef, (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    this.handleModerationUpdates(data);
+                }
+            });
+            
+            // Subscribe to user role updates (for current user)
+            if (!this.isReadOnly) {
+                const userRoleRef = this.ref(this.database, `registered_users/${this.currentUser.username}`);
+                this.onValue(userRoleRef, (snapshot) => {
+                    const userData = snapshot.val();
+                    if (userData && userData.role) {
+                        this.syncUserRole(userData);
+                    }
+                });
+            }
+            
             // Add current user to online users (only if registered)
             if (!this.isReadOnly) {
                 this.addUserToFirebase().catch(error => {
@@ -446,9 +466,67 @@ class HackConvo {
         this.updateOnlineCount();
     }
 
+    handleModerationUpdates(data) {
+        console.log('[DEBUG] Received moderation update:', data);
+        
+        if (!this.currentUser) return;
+        
+        // Check if current user is muted
+        if (data.muted && data.muted[this.currentUser.username]) {
+            const muteData = data.muted[this.currentUser.username];
+            console.log('[DEBUG] User is muted:', muteData);
+            
+            if (muteData.expiresAt && Date.now() < muteData.expiresAt) {
+                this.showMuteMessage(muteData);
+                this.disableMessageSending();
+            } else {
+                // Mute expired, remove it
+                this.removeMuteStatus();
+            }
+        } else {
+            // User is not muted, enable sending
+            this.enableMessageSending();
+        }
+        
+        // Check if current user is banned
+        if (data.banned && data.banned[this.currentUser.username]) {
+            const banData = data.banned[this.currentUser.username];
+            console.log('[DEBUG] User is banned:', banData);
+            
+            if (banData.expiresAt && Date.now() < banData.expiresAt) {
+                this.showBanMessage(banData);
+                this.disableChat();
+            } else {
+                // Ban expired, remove it
+                this.removeBanStatus();
+            }
+        }
+        
+        // Update moderation menu permissions for all users
+        this.updateModerationMenus();
+    }
+
+    updateModerationMenus() {
+        // Update moderation menu permissions for all message authors
+        const messageElements = document.querySelectorAll('.message-author');
+        messageElements.forEach(element => {
+            const username = element.getAttribute('data-username');
+            if (username) {
+                const canModerate = this.canModerateUser(username);
+                if (canModerate) {
+                    element.classList.add('can-moderate');
+                    element.onclick = (event) => this.toggleModMenu(event, username);
+                } else {
+                    element.classList.remove('can-moderate');
+                    element.onclick = null;
+                }
+            }
+        });
+    }
+
     syncUserRole(dbUser) {
-        // Only update if the database role is higher than current role
-        if (dbUser.role && this.getRoleLevel(dbUser.role) > this.getRoleLevel(this.currentUser.role || 'user')) {
+        // Always sync role from database to ensure consistency
+        if (dbUser.role && dbUser.role !== (this.currentUser.role || 'user')) {
             console.log('[DEBUG] Syncing user role from', this.currentUser.role, 'to', dbUser.role);
             this.currentUser.role = dbUser.role;
             this.saveUser(this.currentUser);
